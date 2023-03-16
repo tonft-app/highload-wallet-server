@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"os"
 
 	"github.com/joho/godotenv"
 	"github.com/xssnick/tonutils-go/address"
@@ -22,100 +22,70 @@ var client *liteclient.ConnectionPool
 var api *ton.APIClient
 var w *wallet.Wallet
 
+
+// get responseWriter and 
+
+func respondError(responseWriter http.ResponseWriter, err error) {
+	responseWriter.Header().Set("Content-Type", "application/json")
+	responseWriter.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(responseWriter).Encode(map[string]string{
+		"error": err.Error(),
+	})
+}
+
 func sendTransactions(responseWriter http.ResponseWriter, req *http.Request) {
-	// read query param "send_mode"
 	sendModeString := req.URL.Query().Get("send_mode")
+	log.Println("Send mode:", sendModeString)
 
-	// print send mode
-	log.Println("send mode:", sendModeString)
-
-
-	// parse send mode as uint8
 	sendMode, err := strconv.ParseUint(sendModeString, 10, 8)
+
 	if err != nil {
-		// return json error
-		responseWriter.Header().Set("Content-Type", "application/json")
-		responseWriter.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(responseWriter).Encode(map[string]string{
-			"error": err.Error(),
-		})
+		respondError(responseWriter, err)
 		return
 	}
-
-	// print
-	
 
 	commentText := req.URL.Query().Get("comment")
 
 	log.Println("comment:", commentText)
 
 	var txs map[string]string
-	// print request body
-	log.Println("request body:", req.Body)
+
 	err = json.NewDecoder(req.Body).Decode(&txs)
 
-
-	log.Println("txs:", txs)
+	log.Println("Transactions:", txs)
 
 	if err != nil {
-		log.Println("json decode err:", err.Error())
-
-		// return json error
-		responseWriter.Header().Set("Content-Type", "application/json")
-		responseWriter.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(responseWriter).Encode(map[string]string{
-			"error": err.Error(),
-		})
-
+		log.Println("Json decode err:", err.Error())
+		respondError(responseWriter, err)
 		return
 	}
 
 	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
-		responseWriter.Header().Set("Content-Type", "application/json")
-		responseWriter.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(responseWriter).Encode(map[string]string{
-			"error": err.Error(),
-		})
+		respondError(responseWriter, err)
 		return
 	}
 
 	balance, err := w.GetBalance(context.Background(), block)
 	if err != nil {
-		// return json error
-		responseWriter.Header().Set("Content-Type", "application/json")
-		responseWriter.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(responseWriter).Encode(map[string]string{
-			"error": err.Error(),
-		})
+		respondError(responseWriter, err)
 		return
 	}
 
-
-	// sum all transaction amounts and write to totalAmount
 	var totalAmount float64
 	for _, amtStr := range txs {
-
-		// create float from string
 		amtFloat, err := strconv.ParseFloat(amtStr, 64)
 
 		if err != nil {
-			// return json error
-			responseWriter.Header().Set("Content-Type", "application/json")
-			responseWriter.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(responseWriter).Encode(map[string]string{
-				"error": err.Error(),
-			})
+			respondError(responseWriter, err)
 			return
 		}
+
 		totalAmount += amtFloat
 	}
 
-	// make from float to uint64
 	totalAmountUint64 := uint64(totalAmount * 1e9)
 
-
-	
 	if balance.NanoTON().Uint64() >= totalAmountUint64 {
 		comment, err := wallet.CreateCommentCell(commentText)
 		if err != nil {
@@ -124,12 +94,11 @@ func sendTransactions(responseWriter http.ResponseWriter, req *http.Request) {
 		}
 
 		var messages []*wallet.Message
-		// generate message for each destination, in single transaction can be sent up to 254 messages
 		for addrStr, amtStr := range txs {
 			messages = append(messages, &wallet.Message{
-				Mode: uint8(sendMode), // pay fee separately
+				Mode: uint8(sendMode),
 				InternalMessage: &tlb.InternalMessage{
-					Bounce:  false, // force send, even to uninitialized wallets
+					Bounce:  false, 
 					DstAddr: address.MustParseAddr(addrStr),
 					Amount:  tlb.MustFromTON(amtStr),
 					Body:  comment,
@@ -137,23 +106,17 @@ func sendTransactions(responseWriter http.ResponseWriter, req *http.Request) {
 			})
 		}
 
-		log.Println("sending transaction and waiting for confirmation...")
+		log.Println("Sending transaction and waiting for confirmation...")
 
-		// send transaction that contains all our messages, and wait for confirmation
 		txHash, err := w.SendManyWaitTxHash(context.Background(), messages)
 		if err != nil {
-			// return json error
-			responseWriter.Header().Set("Content-Type", "application/json")
-			responseWriter.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(responseWriter).Encode(map[string]string{
-				"error": err.Error(),
-			})
+			respondError(responseWriter, err)
 			return
 		}
 
-		log.Println("transaction sent, hash:", base64.StdEncoding.EncodeToString(txHash))
-		log.Println("explorer link: https://tonscan.org/tx/" + base64.URLEncoding.EncodeToString(txHash))
-		// return json with transaction hash and explorer link
+		log.Println("Transaction sent, hash:", base64.StdEncoding.EncodeToString(txHash))
+		log.Println("Explorer link: https://tonscan.org/tx/" + base64.URLEncoding.EncodeToString(txHash))
+
 		responseWriter.Header().Set("Content-Type", "application/json")
 		responseWriter.WriteHeader(http.StatusOK)
 		json.NewEncoder(responseWriter).Encode(map[string]string{
@@ -163,11 +126,10 @@ func sendTransactions(responseWriter http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// answer with json error not enough balance
 	responseWriter.Header().Set("Content-Type", "application/json")
 	responseWriter.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(responseWriter).Encode(map[string]string{
-		"error": "not enough balance",
+		"error": "Not enough balance",
 	})
 }
 
@@ -182,27 +144,29 @@ func main() {
 
 	api = ton.NewAPIClient(client)
 
-
-	// read seed words from env
 	err = godotenv.Load()
     if err != nil {
         log.Fatalln("Error loading .env file", err.Error())
     }
-	seedWords := os.Getenv("SEED_WORDS")
 
-	words := strings.Split(seedWords, " ")
+	seedWords := os.Getenv("SEED_PHRASE")
+	var words []string;
+	
+	if seedWords == "" {
+		log.Fatalln("SEED_PHRASE env is empty")
+		words = wallet.NewSeed()
+		log.Println("Generated seed words:", strings.Join(words, " "))
+	} else{
+		words = strings.Split(seedWords, " ")
+	}
 
-	// initialize high-load wallet
 	w, err = wallet.FromSeed(api, words, wallet.HighloadV2R2)
 	if err != nil {
 		log.Fatalln("FromSeed err:", err.Error())
 		return
 	}
 
-	log.Println("wallet address:", w.Address())
-
+	log.Println("Wallet address:", w.Address())
 	http.HandleFunc("/sendTransactions", sendTransactions)
-
 	http.ListenAndServe(":8888", nil)
-	log.Println("Server started on port 8888")
 }
