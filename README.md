@@ -2,7 +2,7 @@
 
 ## Features
 High load handling capabilities
-Ability to send batches of up to 250 transactions per request.
+Ability to send batches of up to 255 transactions per request.
 - RESTful API for easy integration with other applications
 
 ## Installation
